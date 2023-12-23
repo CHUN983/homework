@@ -1,25 +1,6 @@
-// proxy.c
 #include <signal.h>
 #include "utility.h"
-
-
-int tcp_open_client(char *host, char* port) {
-	int			sockfd;
-	struct sockaddr_in	serv_addr;
-
-	/* Fill in "serv_addr" with the address of the server */
-	bzero((char *) &serv_addr, sizeof(serv_addr));
-	serv_addr.sin_family	  = AF_INET;
-	serv_addr.sin_addr.s_addr = my_inet_addr(host);
-	serv_addr.sin_port	  = htons(atoi(port));
-
-	/* Open a TCP socket (an Internet stream socket). */
-	if((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0
-	   || connect(sockfd, (struct sockaddr *) &serv_addr,
-					sizeof(serv_addr)) < 0)
-		return -1;
-	return sockfd;
-}
+#define MAX_URL_LEN 1000
 
 int tcp_open_server(char *port) {
 	int			sockfd;
@@ -37,6 +18,24 @@ int tcp_open_server(char *port) {
 	if(bind(sockfd, (struct sockaddr*) &serv_addr, sizeof(serv_addr)) < 0)
 		return -1;
 	listen(sockfd, 5);
+	return sockfd;
+}
+
+int tcp_open_client(char *host, char* port) {
+	int			sockfd;
+	struct sockaddr_in	serv_addr;
+
+	/* Fill in "serv_addr" with the address of the server */
+	bzero((char *) &serv_addr, sizeof(serv_addr));
+	serv_addr.sin_family	  = AF_INET;
+	serv_addr.sin_addr.s_addr = my_inet_addr(host);
+	serv_addr.sin_port	  = htons(atoi(port));
+
+	/* Open a TCP socket (an Internet stream socket). */
+	if((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0
+	   || connect(sockfd, (struct sockaddr *) &serv_addr,
+					sizeof(serv_addr)) < 0)
+		return -1;
 	return sockfd;
 }
 
@@ -74,9 +73,14 @@ void do_main(int newsockfd) {
 	}
 }
 
-int http_get(char *url, char *proxy_host, char *proxy_port) {
-    int sockfd, ret;
+int request_proxy_server(char *client_host, char *client_port){
+    int sockfd, len, ret;
     char buf[MAX_LINE];
+
+    char url[MAX_URL_LEN];
+    printf("Enter URL: ");
+    fgets(url, MAX_URL_LEN, stdin);
+    strtok(url, "\n"); // Remove the newline character
 
     // Parse the URL to extract host and port
     char host[MAX_URL_LEN];
@@ -96,109 +100,60 @@ int http_get(char *url, char *proxy_host, char *proxy_port) {
         return -1;
     }
 
-    // Connect to the proxy server (172.30.148.62:8080)
-    sockfd = tcp_open_client(host, "80");
+    // Send HTTP GET request
+    sockfd = tcp_open_client(client_host, client_port);
     if (sockfd < 0) {
-        fprintf(stderr, "Error connecting to proxy server %s:%s\n", proxy_host, proxy_port);
+        fprintf(stderr, "Error opening client\n");
         return -1;
     }
-
-    // Send HTTP GET request to the proxy server
-    snprintf(buf, MAX_LINE, "GET %s HTTP/1.0\r\n\r\n", url);
+    snprintf(buf, MAX_LINE, "GET /%s HTTP/1.0\r\n\r\n", path);
     send(sockfd, buf, strlen(buf), 0);
 
-    // Receive and print the response from the proxy server
+
+    int proxy_sockfd;
+    proxy_sockfd= tcp_open_client(host, port);
+    send(proxy_sockfd, buf, strlen(buf), 0);
+    
+
+
+
     while (1) {
-        if ((ret = readready(sockfd)) < 0) break;
+        if ((ret = readready(proxy_sockfd)) < 0) break;
         if (ret > 0) {
-            if (readline(sockfd, buf, MAX_LINE) <= 0) break;
+            if (readline(proxy_sockfd, buf, MAX_LINE) <= 0) break;
             fputs(buf, stdout);
         }
     }
-    printf("\n---------------------------\n");
 
-    // while (1) {
-    //     int ret = readready(sockfd);
-    //     if (ret < 0) break;
-    //     if (ret > 0) {
-    //         if (readline(sockfd, buf, MAX_LINE) <= 0) break;
-    //         send(client_sockfd, buf, strlen(buf), 0);
-    //     }
-    // }
-
+    close(proxy_sockfd);
     close(sockfd);
     return 0;
+
 }
 
-
-void proxy_request(int client_sockfd, char *server_host, char *server_port, char *url) {
-    int server_sockfd;
-    char buf[MAX_LINE];
-
-    // Connect to the local server (localhost:8080)
-    server_sockfd = tcp_open_client(server_host, server_port);
-    if (server_sockfd < 0) {
-        fprintf(stderr, "Error connecting to %s:%s\n", server_host, server_port);
-        return;
-    }
-
-    // Forward the client request to the local server
-    while (1) {
-        int ret = readready(client_sockfd);
-        if (ret < 0) break;
-        if (ret > 0) {
-            if (readline(client_sockfd, buf, MAX_LINE) <= 0) break;
-            send(server_sockfd, buf, strlen(buf), 0);
-        }
-    }
-
-    // Receive the response from the local server and forward it to the client
-    while (1) {
-        int ret = readready(server_sockfd);
-        if (ret < 0) break;
-        if (ret > 0) {
-            if (readline(server_sockfd, buf, MAX_LINE) <= 0) break;
-            send(client_sockfd, buf, strlen(buf), 0);
-        }
-    }
-
-    close(server_sockfd);
-}
 
 int main(int argc, char *argv[]) {
-    if (argc != 2) {
-        fprintf(stderr, "Usage: %s <port>\n", argv[0]);
-        return 1;
-    }
+	int sockfd, newsockfd, clilen, childpid;
+	struct sockaddr_in cli_addr;
 
-    int sockfd, newsockfd, clilen, childpid;
-    struct sockaddr_in cli_addr;
+	sockfd = tcp_open_server(argv[1]);
+	
+	for( ; ; ) {
+	/* Wait for a connection from a client process. (Concurrent Server)*/
+		clilen = sizeof(cli_addr);
+		newsockfd = accept(sockfd,(struct sockaddr*)&cli_addr,&clilen);
+		if(newsockfd < 0) exit(1); /* server: accept error */
+		if((childpid  = fork()) < 0) exit(1); /* server: fork error */
 
-    sockfd = tcp_open_server(argv[1]);
+			
+		if(childpid == 0) {		/* child process	*/
+			close(sockfd);		/* close original socket*/
+			do_main(newsockfd);	/* process the request	*/
+            request_proxy_server("172.30.148.62",argv[1]);
+			exit(0);
+		}
 
-    for (;;) {
-        // Wait for a connection from a client process (Concurrent Server)
-        clilen = sizeof(cli_addr);
-        newsockfd = accept(sockfd, (struct sockaddr *) &cli_addr, &clilen);
-        if (newsockfd < 0) exit(1); /* server: accept error */
-        if ((childpid = fork()) < 0) exit(1); /* server: fork error */
+		close(newsockfd);		/* parent process	*/
 
-        if (childpid == 0) { /* child process */
-
-            // Prompt the user to enter a URL
-            char url[MAX_URL_LEN];
-            printf("Enter URL: ");
-            fgets(url, MAX_URL_LEN, stdin);
-            strtok(url, "\n"); // Remove the newline character
-            http_get(url, "172.30.148.62", "8080");
-
-            close(sockfd); /* close original socket */
-			do_main(newsockfd);//通知開啟proxy server(webserv.c)
-            exit(0);
-        }
-
-        close(newsockfd); /* parent process */
-    }
+	}
 }
-
-//http://gaia.cs.umass.edu/wireshark-labs/HTTP-wireshark-file1.html
