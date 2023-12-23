@@ -97,7 +97,7 @@ int http_get(char *url, char *proxy_host, char *proxy_port) {
     }
 
     // Connect to the proxy server (172.30.148.62:8080)
-    sockfd = tcp_open_client(proxy_host, proxy_port);
+    sockfd = tcp_open_client(host, "80");
     if (sockfd < 0) {
         fprintf(stderr, "Error connecting to proxy server %s:%s\n", proxy_host, proxy_port);
         return -1;
